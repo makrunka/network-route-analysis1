@@ -1,209 +1,117 @@
 import streamlit as st
 import networkx as nx
 import matplotlib.pyplot as plt
+import main  # Імпортуємо наш файл з логікою
 
 st.set_page_config(page_title="Аналіз маршрутів мережі", layout="wide")
 
-# ----------------------------
-# Створення корпоративної мережі (30 вузлів)
-# ----------------------------
-
-def create_network():
-    G = nx.Graph()
-
-    edges = [
-    # Core
-    ("Core","R1",2),
-    ("Core","R2",3),
-    ("Core","R3",2),
-    ("Core","R4",4),
-
-    # Серверний сегмент
-    ("R1","DB_Server",1),
-    ("R1","Web_Server",2),
-    ("R1","Mail_Server",2),
-    ("R1","DNS_Server",1),
-
-    # Комутатори
-    ("R2","SW1",2),
-    ("R2","SW2",3),
-    ("R3","SW3",2),
-    ("R4","SW4",3),
-
-    # Клієнтські вузли
-    ("SW1","PC1",1),
-    ("SW1","PC2",1),
-    ("SW1","PC3",2),
-    ("SW1","PC4",2),
-
-    ("SW2","PC5",1),
-    ("SW2","PC6",2),
-    ("SW2","PC7",1),
-    ("SW2","PC8",2),
-
-    ("SW3","PC9",1),
-    ("SW3","PC10",2),
-    ("SW3","PC11",1),
-    ("SW3","PC12",2),
-
-    ("SW4","PC13",1),
-    ("SW4","PC14",2),
-    ("SW4","PC15",1),
-
-    # Резервні зв'язки
-    ("R2","R3",4),
-    ("R3","R4",3),
-    ("R2","R4",5),
-
-    ("Firewall1","Core",2),
-    ("Firewall2","Core",2),
-
-    ("Firewall1","Internet",3),
-    ("Firewall2","Internet",3)
-    ]
-
-    G.add_weighted_edges_from(edges)
-    return G
-
-G = create_network()
-
-nodes = sorted(G.nodes())
+# Завантажуємо базовий граф
+G_base = main.create_network()
+nodes = sorted(G_base.nodes())
 
 # ----------------------------
-# Функції
+# Sidebar (Налаштування)
 # ----------------------------
-
-def shortest_path(start,end):
-    path = nx.dijkstra_path(G,start,end)
-    length = nx.dijkstra_path_length(G,start,end)
-    return path,length
-
-def backup_path(start,end):
-    paths=list(nx.shortest_simple_paths(G,start,end,weight='weight'))
-    if len(paths)>1:
-        return paths[1]
-    return None
-
-def network_connected():
-    return nx.is_connected(G)
-
-def critical_nodes():
-    return list(nx.articulation_points(G))
-
-# ----------------------------
-# Sidebar
-# ----------------------------
-
 st.sidebar.header("Налаштування")
 
-start = st.sidebar.selectbox(
-"Початковий вузол",
-nodes
-)
+start = st.sidebar.selectbox("Початковий вузол", nodes)
+end = st.sidebar.selectbox("Кінцевий вузол", nodes, index=5)
+failed_node = st.sidebar.selectbox("Симуляція відмови вузла", ["Немає"] + nodes)
 
-end = st.sidebar.selectbox(
-"Кінцевий вузол",
-nodes,
-index=5
-)
-
-failed_node=st.sidebar.selectbox(
-"Симуляція відмови вузла",
-["Немає"]+nodes
-)
-
-# Симуляція відмови
-if failed_node!="Немає":
+# Робимо копію графа для аналізу, щоб не зламати оригінал при видаленні вузла
+G = G_base.copy()
+if failed_node != "Немає":
     G.remove_node(failed_node)
 
 # ----------------------------
-# Аналіз маршруту
+# Головне вікно аналізу
 # ----------------------------
-
-st.title("Аналіз маршрутів корпоративної мережі")
+st.title("Аналіз маршрутів та топології корпоративної мережі")
 
 if st.button("Запустити аналіз"):
-
+    
+    # БЛОК 1: Базовий пошук маршрутів
+    st.subheader("1. Пошук маршрутів")
     try:
-        path,length=shortest_path(start,end)
-
+        path, length = main.shortest_path(G, start, end)
         st.success(f"Найкоротший маршрут: {' -> '.join(path)}")
         st.info(f"Вартість маршруту: {length}")
 
-        reserve=backup_path(start,end)
+        reserve = main.backup_path(G, start, end)
         if reserve:
-            st.write(
-            "Резервний маршрут:",
-            " -> ".join(reserve)
-            )
+            st.write("**Резервний маршрут:**", " -> ".join(reserve))
 
-        st.write(
-        "Зв'язність мережі:",
-        "Так" if network_connected() else "Ні"
-        )
+    except nx.NetworkXNoPath:
+        st.error("Маршрут не знайдено. Вузли ізольовані один від одного.")
+    except nx.NodeNotFound:
+        st.error("Один з обраних вузлів недоступний (ймовірно, він відключений під час симуляції).")
 
-        st.write(
-        "Критичні вузли:",
-        critical_nodes()
-        )
+    # БЛОК 2: Розширений аналіз топології (для викладача)
+    st.subheader("2. Аналіз мережевої топології")
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Щільність графа", f"{main.get_network_density(G):.4f}")
+    
+    is_connected = main.network_connected(G)
+    col2.metric("Зв'язність мережі", "Так" if is_connected else "Ні (Розпад)")
+    
+    components = main.get_connected_components(G)
+    col3.metric("Кількість компонент зв'язності", len(components))
 
-        # Візуалізація
-        pos=nx.spring_layout(G,seed=42)
+    st.write("**Критичні вузли (Articulation Points):**", main.critical_nodes(G))
+    
+    if not is_connected:
+        with st.expander("Деталі розпаду графа (ізольовані сегменти)"):
+            for i, comp in enumerate(components):
+                st.write(f"**Сегмент {i+1}:** {list(comp)}")
 
-        plt.figure(figsize=(14,8))
+    # БЛОК 3: Аналіз ступенів та центральності
+    st.subheader("3. Формальний аналіз вузлів (Centrality & Degrees)")
+    metrics_df = main.get_node_metrics(G)
+    st.dataframe(metrics_df, use_container_width=True)
 
-        nx.draw(
-            G,pos,
-            with_labels=True,
-            node_size=1000
-        )
+    # БЛОК 4: Візуалізація
+    st.subheader("4. Візуалізація мережі")
+    
+    tab1, tab2 = st.tabs(["Основна топологія", "Мінімальне остовне дерево (MST)"])
+    pos = nx.spring_layout(G, seed=42)
+    
+    with tab1:
+        fig1, ax1 = plt.subplots(figsize=(14, 8))
+        nx.draw(G, pos, with_labels=True, node_color='lightblue', node_size=1000, ax=ax1)
+        if 'path' in locals():
+            path_edges = list(zip(path, path[1:]))
+            nx.draw_networkx_edges(G, pos, edgelist=path_edges, width=3, edge_color='red', ax=ax1)
+        edge_labels = nx.get_edge_attributes(G, 'weight')
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=ax1)
+        st.pyplot(fig1)
 
-        path_edges=list(zip(path,path[1:]))
+    with tab2:
+        fig2, ax2 = plt.subplots(figsize=(14, 8))
+        mst_graph = main.get_mst(G)
+        nx.draw(mst_graph, pos, with_labels=True, node_color='lightgreen', node_size=1000, edge_color='green', width=2, ax=ax2)
+        mst_labels = nx.get_edge_attributes(mst_graph, 'weight')
+        nx.draw_networkx_edge_labels(mst_graph, pos, edge_labels=mst_labels, ax=ax2)
+        st.pyplot(fig2)
 
-        nx.draw_networkx_edges(
-            G,pos,
-            edgelist=path_edges,
-            width=3
-        )
-
-        edge_labels=nx.get_edge_attributes(G,'weight')
-        nx.draw_networkx_edge_labels(
-            G,pos,
-            edge_labels=edge_labels
-        )
-
-        st.pyplot(plt)
-
-    except:
-        st.error("Маршрут не знайдено.")
-
+# ----------------------------
 # Тестування
-if st.checkbox("Показати тестування"):
-
-    tests=[
+# ----------------------------
+st.markdown("---")
+if st.checkbox("Показати результати тестування"):
+    tests = [
         ("PC1","DB_Server"),
         ("PC8","DNS_Server"),
         ("PC14","Mail_Server"),
         ("PC5","PC12")
     ]
 
-    for a,b in tests:
+    for a, b in tests:
         try:
-            p,l=shortest_path(a,b)
-
-            st.success(
-                f"{a} -> {b}\n"
-                f"Маршрут: {p}\n"
-                f"Довжина={l}"
-            )
-
+            p, l = main.shortest_path(G_base, a, b)
+            st.success(f"{a} -> {b} | Маршрут: {p} | Довжина: {l}")
         except nx.NetworkXNoPath:
-            st.warning(
-                f"{a} -> {b}: маршрут відсутній "
-                f"(можлива відмова вузла)"
-            )
-
-        except:
-            st.error(
-                f"Помилка тесту {a}->{b}"
+            st.warning(f"{a} -> {b}: маршрут відсутній")
+        except Exception as e:
+            st.error(f"Помилка тесту {a}->{b}: {e}")ту {a}->{b}"
             )
