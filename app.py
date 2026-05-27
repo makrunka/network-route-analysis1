@@ -113,5 +113,4 @@ if st.checkbox("Показати результати тестування"):
         except nx.NetworkXNoPath:
             st.warning(f"{a} -> {b}: маршрут відсутній")
         except Exception as e:
-            st.error(f"Помилка тесту {a}->{b}: {e}")ту {a}->{b}"
-            )
+            st.error(f"Помилка тесту {a}->{b}: {e}")
